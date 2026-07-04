@@ -1,0 +1,4 @@
+secrets.h
+*.tmp
+build/
+.pio/
