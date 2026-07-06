@@ -26,6 +26,12 @@
 #define GMT_OFFSET_SEC 10800   // Turkey = GMT+3 = 3 * 3600 seconds
 #define DAYLIGHT_OFFSET_SEC 0  // Turkey does not use daylight saving time
 
+// schedule settings (HH:MM format)
+#define LED_START  "08:00"
+#define LED_END    "20:00"
+#define PUMP_START "08:00"
+#define PUMP_END   "08:05"
+
 DHT dht(DHT_PIN, DHT_TYPE);
 
 // track current relay states so we only write GPIO when something changes
@@ -84,6 +90,27 @@ void syncTimeWithNTP() {
   }
 }
 
+// convert "HH:MM" into total minutes since midnight, -1 if invalid
+int timeToMinutes(const char* hhmm) {
+  int h = 0, m = 0;
+  if (scanf(hhmm, "%d:%d", &h, &m) == 2) {
+    return h * 60 + m;
+  }
+  return -1;
+}
+
+// check if current time falls within [start, end), handles ranges that cross midnight
+bool isScheduleActive(int nowMin, const char* startStr, const char* endStr) {
+  int startMin = timeToMinutes(startStr);
+  int endMin   = timeToMinutes(endStr);
+  if (startMin < 0 || endMin < 0) return false;
+
+  if (startMin <= endMin) {
+    return (nowMin >= startMin && nowMin < endMin);
+  }
+  return (nowMin >= startMin || nowMin < endMin);
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -122,16 +149,21 @@ void loop() {
     Serial.printf("Water distance: %.1f cm\n", waterDistance);
   }
 
+  // get current time
+  struct tm timeinfo;
+  bool timeValid = getLocalTime(&timeinfo);
+  int nowMin = timeValid ? (timeinfo.tm_hour * 60 + timeinfo.tm_min) : -1;
+
   // decide pump state
-  bool desiredPumpState = true;
-
   bool safetyCutoff = (waterDistance >= WATER_SAFETY_DISTANCE_CM);
-
   bool newPumpState;
+
   if (safetyCutoff) {
     newPumpState = false;  // safety always wins, overrides desired state
+  } else if (timeValid) {
+    newPumpState = isScheduleActive(nowMin, PUMP_START, PUMP_END);
   } else {
-    newPumpState = desiredPumpState;
+    newPumpState = pumpOn;  // time not available yet, keep current state
   }
 
   // only touch the relay if the state actually changed
@@ -145,10 +177,20 @@ void loop() {
     }
   }
 
-  // LED still runs a simple toggle for now (real schedule comes later)
-  ledOn = !ledOn;
-  digitalWrite(LED_RELAY_PIN, ledOn ? RELAY_ON : RELAY_OFF);
-  Serial.printf("Led changed to: %s\n", ledOn ? "ON" : "OFF");
+  // decide LED state
+  bool newLedState;
+  
+  if (timeValid) {
+    newLedState = isScheduleActive(nowMin, LED_START, LED_END);
+  } else {
+    newLedState = ledOn;
+  }
+
+  if (newLedState != ledOn) {
+    ledOn = newLedState;
+    digitalWrite(LED_RELAY_PIN, ledOn ? RELAY_ON : RELAY_OFF);
+    Serial.printf("Led changed to: %s\n", ledOn ? "ON" : "OFF");
+  }
 
   delay(2000);
 }
