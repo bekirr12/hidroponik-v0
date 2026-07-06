@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <DHT.h>
+#include <WiFi.h>
+#include <time.h>
+#include "secrets.h"
 
 // pin definitions
 #define PUMP_RELAY_PIN 5
@@ -18,6 +21,10 @@
 
 // if measured distance is >= this value, the tank is considered low (unsafe)
 #define WATER_SAFETY_DISTANCE_CM 16.0
+
+#define NTP_SERVER "pool.ntp.org"
+#define GMT_OFFSET_SEC 10800   // Turkey = GMT+3 = 3 * 3600 seconds
+#define DAYLIGHT_OFFSET_SEC 0  // Turkey does not use daylight saving time
 
 DHT dht(DHT_PIN, DHT_TYPE);
 
@@ -41,6 +48,42 @@ float readWaterLevelCm() {
   return (duration * SOUND_SPEED_CM_US) / 2.0;
 }
 
+void connectToWiFi() {
+  Serial.printf("Connecting to WiFi: %s\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
+    delay(300);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println();
+    Serial.printf("WiFi connected, IP address: %s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println();
+    Serial.println("WiFi connection failed, continuing without network");
+  }
+}
+
+void syncTimeWithNTP() {
+  if(WiFi.status() != WL_CONNECTED) {
+    Serial.println("Skipping NTP sync, WiFi not connected");
+    return;
+  }
+
+  configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    Serial.printf("Time synced: %02d:%02d:%02d\n",
+                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  } else {
+    Serial.println("Failed to obtain time from NTP");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -54,6 +97,9 @@ void setup() {
   digitalWrite(TRIG_PIN, LOW);
 
   dht.begin();
+
+  connectToWiFi();
+  syncTimeWithNTP();
 
   Serial.println("Setup complete, starting safety logic test");
 }
